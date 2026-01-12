@@ -1,11 +1,26 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.16)
 project(web_client)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(web_client main.cpp)
+find_package(Crow REQUIRED)
+find_package(redis++ REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
-target_include_directories(web_client
-    PRIVATE
-        ${CMAKE_SOURCE_DIR}/Crow/include
+add_executable(web-client
+    src/main.cpp
+    src/redis.cpp
+    src/handlers/root.cpp
+    src/handlers/login.cpp
+    src/handlers/logout.cpp
+)
+
+target_link_libraries(web-client
+    Crow::Crow
+    redis++::redis++
+    nlohmann_json::nlohmann_json
+    uuid
+    hiredis
+    curl
 )
