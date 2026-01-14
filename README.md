@@ -25,6 +25,10 @@ docker-compose up --build
 COMPOSE_BAKE=false docker-compose up --build
 ```
 
+Если сборка падает с ошибкой CMake вида `Parse error ... got unquoted argument with text "--git"`,
+проверьте, что в `CMakeLists.txt` не остались конфликтные маркеры или куски diff
+(`diff --git`, `<<<<<<<`, `=======`, `>>>>>>>`) после merge.
+
 ## Конфигурация
 Можно переопределить адреса модулей через переменные окружения:
 
