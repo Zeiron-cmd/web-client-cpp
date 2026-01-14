@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <uuid/uuid.h>
+#include <cstdlib>
 
 inline std::string gen_uuid() {
     uuid_t id;
@@ -15,4 +16,10 @@ inline std::string extract_session(const std::string& cookie) {
     if (pos == std::string::npos) return "";
     auto end = cookie.find(";", pos);
     return cookie.substr(pos + 8, end - pos - 8);
+}
+
+inline std::string get_env(const char* key, const std::string& fallback) {
+    const char* value = std::getenv(key);
+    if (!value) return fallback;
+    return std::string(value);
 }
