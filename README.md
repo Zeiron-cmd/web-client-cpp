@@ -32,8 +32,8 @@ COMPOSE_BAKE=false docker-compose up --build
 ## Конфигурация
 Можно переопределить адреса модулей через переменные окружения:
 
-- `AUTH_URL` (по умолчанию `http://auth:8081`)
-- `MAIN_URL` (по умолчанию `http://main:8082`)
+- `AUTH_URL` (по умолчанию `https://religiose-multinodular-jaqueline.ngrok-free.dev`)
+- `MAIN_URL` (по умолчанию `https://shabbiest-continuately-zulma.ngrok-free.dev`)
 - `MAIN_BASE_URL` (альтернатива `MAIN_URL`, имеет приоритет)
 
 ## Интеграция с модулем авторизации
