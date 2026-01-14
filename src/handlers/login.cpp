@@ -4,13 +4,21 @@
 #include "../utils.hpp"
 #include <nlohmann/json.hpp>
 
+namespace {
+crow::response redirect_to(const std::string& location) {
+    crow::response res(302);
+    res.add_header("Location", location);
+    return res;
+}
+} // namespace
+
 void register_login(crow::SimpleApp& app, RedisClient& redis) {
     CROW_ROUTE(app, "/login")
     ([&redis](const crow::request& req) {
 
         auto type = req.url_params.get("type");
         if (!type) {
-            return crow::response(302).add_header("Location", "/");
+            return redirect_to("/");
         }
 
         std::string session = extract_session(req.get_header_value("Cookie"));
@@ -24,7 +32,7 @@ void register_login(crow::SimpleApp& app, RedisClient& redis) {
             if (existing) {
                 auto parsed = parse_session(*existing);
                 if (parsed && parsed->status == "authorized") {
-                    return crow::response(302).add_header("Location", "/");
+                    return redirect_to("/");
                 }
             } else {
                 needs_new_session = true;

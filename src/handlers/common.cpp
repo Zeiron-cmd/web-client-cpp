@@ -19,7 +19,9 @@ std::string main_base_url() {
 }
 
 crow::response redirect_to(const std::string& location) {
-    return crow::response(302).add_header("Location", location);
+    crow::response res(302);
+    res.add_header("Location", location);
+    return res;
 }
 
 crow::response login_page() {
@@ -181,7 +183,7 @@ crow::response handle_request(const crow::request& req, RedisClient& redis) {
 
 void register_catchall(crow::SimpleApp& app, RedisClient& redis) {
     CROW_ROUTE(app, "/<path>")
-    ([&redis](const crow::request& req) {
+    ([&redis](const crow::request& req, const std::string&) {
         return handle_request(req, redis);
     });
 }

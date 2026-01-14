@@ -18,7 +18,12 @@ Web-client модуль системы массового тестировани
 docker-compose up --build
 ```
 
+Если сборка падает с ошибкой `failed to execute bake: read |0: file already closed`,
+выполните запуск с отключённым bake:
 
+```bash
+COMPOSE_BAKE=false docker-compose up --build
+```
 
 ## Конфигурация
 Можно переопределить адреса модулей через переменные окружения:
