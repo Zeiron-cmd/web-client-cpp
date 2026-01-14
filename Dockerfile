@@ -6,6 +6,7 @@ RUN apt update && apt install -y \
     build-essential \
     cmake \
     git \
+    libasio-dev \
     libuuid1 uuid-dev \
     libhiredis-dev \
     libcurl4-openssl-dev \
