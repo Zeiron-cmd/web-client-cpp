@@ -73,7 +73,23 @@ void register_login(crow::SimpleApp& app, RedisClient& redis) {
             response_body = response_body.substr(1, response_body.size() - 2);
         }
 
-        if (response_body.empty()) {
+        std::string redirect_url = response_body;
+        auto parsed_payload = nlohmann::json::parse(auth_response.body, nullptr, false);
+        if (!parsed_payload.is_discarded()) {
+            if (parsed_payload.is_string()) {
+                redirect_url = parsed_payload.get<std::string>();
+            } else if (parsed_payload.is_object()) {
+                for (const auto& key : {"url", "link", "redirect_url", "auth_url"}) {
+                    auto it = parsed_payload.find(key);
+                    if (it != parsed_payload.end() && it->is_string()) {
+                        redirect_url = it->get<std::string>();
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (redirect_url.empty()) {
             return crow::response(502, "Authorization service returned empty response");
         }
 
@@ -87,7 +103,7 @@ void register_login(crow::SimpleApp& app, RedisClient& redis) {
         }
 
         res.code = 302;
-        res.add_header("Location", response_body);
+        res.add_header("Location", redirect_url);
         return res;
     });
 }
