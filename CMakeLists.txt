@@ -10,10 +10,12 @@ find_package(nlohmann_json REQUIRED)
 
 add_executable(web-client
     src/main.cpp
+    src/http.cpp
     src/redis.cpp
     src/handlers/root.cpp
     src/handlers/login.cpp
     src/handlers/logout.cpp
+    src/handlers/common.cpp
 )
 
 target_link_libraries(web-client
