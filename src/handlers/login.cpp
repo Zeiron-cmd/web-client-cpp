@@ -94,7 +94,7 @@ void register_login(crow::SimpleApp& app, RedisClient& redis) {
         }
 
         crow::response res;
-        res.add_header("Set-Cookie", "SESSION=" + session + "; Path=/");
+        res.add_header("Set-Cookie", "SESSION=" + session + "; Path=/; HttpOnly; SameSite=Lax");
 
         if (is_code) {
             res.code = 200;
