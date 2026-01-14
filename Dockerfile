@@ -9,6 +9,7 @@ RUN apt update && apt install -y \
     libasio-dev \
     libuuid1 uuid-dev \
     libhiredis-dev \
+    nlohmann-json3-dev \
     libcurl4-openssl-dev \
     ca-certificates \
  && rm -rf /var/lib/apt/lists/*
