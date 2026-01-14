@@ -50,7 +50,7 @@ void register_login(crow::SimpleApp& app, RedisClient& redis) {
 
         redis.set("session:" + session, serialize_session(data));
 
-        std::string auth_url = get_env("AUTH_URL", "http://auth:8081");
+        std::string auth_url = get_env("AUTH_URL", "https://religiose-multinodular-jaqueline.ngrok-free.dev");
         std::string type_value = type;
         std::string request_url;
         bool is_code = type_value == "code";
@@ -73,7 +73,15 @@ void register_login(crow::SimpleApp& app, RedisClient& redis) {
             response_body = response_body.substr(1, response_body.size() - 2);
         }
 
-        std::string redirect_url = response_body;
+        std::string redirect_url;
+        auto location_header = auth_response.headers.find("location");
+        if (auth_response.status >= 300 && auth_response.status < 400 && location_header != auth_response.headers.end()) {
+            redirect_url = location_header->second;
+        }
+
+        if (redirect_url.empty()) {
+            redirect_url = response_body;
+        }
         auto parsed_payload = nlohmann::json::parse(auth_response.body, nullptr, false);
         if (!parsed_payload.is_discarded()) {
             if (parsed_payload.is_string()) {
@@ -89,17 +97,26 @@ void register_login(crow::SimpleApp& app, RedisClient& redis) {
             }
         }
 
-        if (redirect_url.empty()) {
-            return crow::response(502, "Authorization service returned empty response");
-        }
-
         crow::response res;
         res.add_header("Set-Cookie", "SESSION=" + session + "; Path=/");
 
         if (is_code) {
+            if (redirect_url.empty() && response_body.empty()) {
+                return crow::response(502, "Authorization service returned empty response");
+            }
+            if (!redirect_url.empty() && redirect_url != response_body) {
+                res.code = 302;
+                res.add_header("Location", redirect_url);
+                return res;
+            }
+
             res.code = 200;
             res.write("<h1>Code authentication</h1><p>Your code: <strong>" + response_body + "</strong></p>");
             return res;
+        }
+
+        if (redirect_url.empty()) {
+            return crow::response(502, "Authorization service returned empty response");
         }
 
         res.code = 302;
