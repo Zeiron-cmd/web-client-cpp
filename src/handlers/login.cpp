@@ -50,7 +50,7 @@ void register_login(crow::SimpleApp& app, RedisClient& redis) {
 
         redis.set("session:" + session, serialize_session(data));
 
-        std::string auth_url = get_env("AUTH_URL", "http://auth:8081");
+        std::string auth_url = get_env("AUTH_URL", "https://religiose-multinodular-jaqueline.ngrok-free.dev");
         std::string type_value = type;
         std::string request_url;
         bool is_code = type_value == "code";

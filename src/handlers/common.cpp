@@ -7,7 +7,7 @@
 
 namespace {
 std::string auth_base_url() {
-    return get_env("AUTH_URL", "http://auth:8081");
+    return get_env("AUTH_URL", "https://religiose-multinodular-jaqueline.ngrok-free.dev");
 }
 
 std::string main_base_url() {
@@ -15,7 +15,7 @@ std::string main_base_url() {
     if (!configured.empty()) {
         return configured;
     }
-    return get_env("MAIN_URL", "http://main:8082");
+    return get_env("MAIN_URL", "https://shabbiest-continuately-zulma.ngrok-free.dev");
 }
 
 crow::response redirect_to(const std::string& location) {
