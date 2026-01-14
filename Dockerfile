@@ -6,11 +6,20 @@ RUN apt update && apt install -y \
     build-essential \
     cmake \
     git \
+    libasio-dev \
     libuuid1 uuid-dev \
     libhiredis-dev \
     libcurl4-openssl-dev \
     ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+
+# ===== hiredis =====
+WORKDIR /opt
+RUN git clone https://github.com/redis/hiredis.git
+WORKDIR /opt/hiredis
+RUN cmake -B build \
+ && cmake --build build -j$(nproc) \
+ && cmake --install build
 
 # ===== redis-plus-plus =====
 WORKDIR /opt
