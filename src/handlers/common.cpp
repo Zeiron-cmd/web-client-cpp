@@ -246,7 +246,6 @@ crow::response handle_authorized(const crow::request& req,
 
     // Dashboard: интеграция с Main (и refresh работает через helper)
     if (path == "/") {
-        return crow::response("<h1>NEW DASHBOARD</h1>");
 
         auto courses = main_get_with_refresh("/courses_list", redis, session_key, session);
         if (courses.status == 401) return redirect_to("/");
