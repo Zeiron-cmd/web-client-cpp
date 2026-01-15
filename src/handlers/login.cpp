@@ -3,6 +3,8 @@
 #include "../session.hpp"
 #include "../utils.hpp"
 #include <nlohmann/json.hpp>
+#include "../api/auth_client.hpp"
+
 
 namespace {
 crow::response redirect_to(const std::string& location) {
@@ -51,22 +53,30 @@ void register_login(crow::SimpleApp& app, RedisClient& redis) {
         redis.set("session:" + session, serialize_session(data));
 
         std::string auth_url = get_env("AUTH_URL", "https://religiose-multinodular-jaqueline.ngrok-free.dev");
-        std::string type_value = type;
-        std::string request_url;
-        bool is_code = type_value == "code";
+AuthClient auth(auth_url);
+
+std::string type_value = type;
+bool is_code = type_value == "code";
+
+std::string redirect_url;
+std::string code_value;
 
         if (type_value == "github" || type_value == "yandex") {
-            request_url = auth_url + "/auth/oauth/start?provider=" + type_value + "&token_login=" + login_token;
+            auto url = auth.StartOAuth(type_value, login_token);
+            if (!url) {
+                return crow::response(502, "Authorization service unavailable");
+            }
+            redirect_url = *url;
         } else if (is_code) {
-            request_url = auth_url + "/auth/code/start?token_login=" + login_token;
+            auto code = auth.StartCode(login_token);
+            if (!code) {
+                return crow::response(502, "Authorization service unavailable");
+            }
+            code_value = *code;
         } else {
             return crow::response(400, "Unsupported login provider");
         }
 
-        auto auth_response = http_request("POST", request_url, "", {});
-        if (auth_response.status < 200 || auth_response.status >= 400) {
-            return crow::response(502, "Authorization service unavailable");
-        }
 
         std::string response_body = auth_response.body;
         if (response_body.size() >= 2 && response_body.front() == '"' && response_body.back() == '"') {
@@ -98,9 +108,10 @@ void register_login(crow::SimpleApp& app, RedisClient& redis) {
 
         if (is_code) {
             res.code = 200;
-            res.write("<h1>Code authentication</h1><p>Your code: <strong>" + response_body + "</strong></p>");
+            res.write("<h1>Code authentication</h1><p>Your code: <strong>" + code_value + "</strong></p>");
             return res;
         }
+        
 
         res.code = 302;
         res.add_header("Location", redirect_url);

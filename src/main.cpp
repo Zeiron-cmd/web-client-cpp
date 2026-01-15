@@ -11,5 +11,7 @@ int main() {
     register_logout(app, redis);
     register_catchall(app, redis);
 
-    app.bindaddr("0.0.0.0").port(8080).multithreaded().run();
+    //app.bindaddr("0.0.0.0").port(8080).multithreaded().run();
+    app.port(8080).concurrency(1).run();
+
 }

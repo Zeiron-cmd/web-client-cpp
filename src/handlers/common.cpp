@@ -2,11 +2,10 @@
 #include "../http.hpp"
 #include "../redis.hpp"
 #include "../session.hpp"
-
-#include "../http.hpp"
-#include "../session.hpp"
 #include "../utils.hpp"
 #include <nlohmann/json.hpp>
+#include "../api/main_client.hpp"
+#include "../api/auth_client.hpp"
 
 namespace {
 std::string auth_base_url() {
@@ -51,36 +50,7 @@ std::string path_only(const std::string& url) {
     }
     return url.substr(0, pos);
 }
-// Returns {access_token, refresh_token}; empty strings if failed
-std::pair<std::string, std::string> refresh_tokens(const std::string& refresh_token) {
-    if (refresh_token.empty()) {
-        return {"", ""};
-    }
 
-    nlohmann::json body;
-    body["refresh_token"] = refresh_token;
-
-    std::string url = auth_base_url() + "/auth/refresh";
-    auto resp = http_post_json(url, body.dump(), {});
-    if (resp.status != 200) {
-        return {"", ""};
-    }
-
-    auto payload = nlohmann::json::parse(resp.body, nullptr, false);
-    if (payload.is_discarded() || !payload.is_object()) {
-        return {"", ""};
-    }
-
-    // Be tolerant to naming
-    std::string new_access = payload.value("access_token", "");
-    std::string new_refresh = payload.value("refresh_token", "");
-
-    // Some implementations may return {access, refresh}
-    if (new_access.empty()) new_access = payload.value("access", "");
-    if (new_refresh.empty()) new_refresh = payload.value("refresh", "");
-
-    return {new_access, new_refresh};
-}
 
 crow::response handle_authorized(const crow::request& req,
                                 RedisClient& redis,
@@ -98,45 +68,38 @@ crow::response handle_authorized(const crow::request& req,
         return crow::response(405);
     }
 
-    std::string main_url = main_base_url() + req.url;
-    std::vector<std::string> headers = {"Authorization: Bearer " + session.access_token};
-
     std::string method = req.method == crow::HTTPMethod::GET ? "GET" : "POST";
-    auto main_response = http_request(method, main_url, req.body, headers);
 
-    if (main_response.status == 401) {
-    // Try refresh flow once
-    auto [new_access, new_refresh] = refresh_tokens(session.refresh_token);
-    if (new_access.empty() || new_refresh.empty()) {
-        redis.del(session_key);
-        return redirect_to("/");
+    MainClient main(main_base_url());
+    auto main_result = main.Do(method, req.url, req.body, session.access_token);
+
+    if (main_result.status == 401) {
+        AuthClient auth(auth_base_url());
+        auto refreshed = auth.Refresh(session.refresh_token);
+        if (!refreshed) {
+            redis.del(session_key);
+            return redirect_to("/");
+        }
+
+        session.access_token = refreshed->access_token;
+        session.refresh_token = refreshed->refresh_token;
+        redis.set(session_key, serialize_session(session));
+
+        // retry once
+        main_result = main.Do(method, req.url, req.body, session.access_token);
+
+        if (main_result.status == 401) {
+            redis.del(session_key);
+            return redirect_to("/");
+        }
     }
 
-    session.access_token = new_access;
-    session.refresh_token = new_refresh;
-    redis.set(session_key, serialize_session(session));
-
-    // Retry the same request once with new access token
-    std::vector<std::string> retry_headers = {"Authorization: Bearer " + session.access_token};
-    auto retry_response = http_request(method, main_url, req.body, retry_headers);
-
-    if (retry_response.status == 401) {
-        // Still unauthorized -> drop session
-        redis.del(session_key);
-        return redirect_to("/");
-    }
-
-    if (retry_response.status == 403) {
+    if (main_result.status == 403) {
         return crow::response(403, "<h1>Access denied</h1>");
     }
 
-    crow::response res(static_cast<int>(retry_response.status));
-    res.write(retry_response.body);
-
-    auto content_type = retry_response.headers.find("content-type");
-    if (content_type != retry_response.headers.end()) {
-        res.set_header("Content-Type", content_type->second);
-    }
+    crow::response res(main_result.status);
+    res.write(main_result.body);
     return res;
 }
 
@@ -170,18 +133,36 @@ crow::response handle_anonymous(const crow::request& req,
         return redirect_to("/");
     }
 
-    std::string check_url = auth_base_url() + "/auth/status?token_login=" + session.login_token;
-    auto check_response = http_get(check_url);
-
-    if (check_response.status != 200) {
+    AuthClient auth(auth_base_url());
+    auto st = auth.Status(session.login_token);
+    if (!st) {
+        // Не смогли узнать статус — по твоему сценарию обычно редирект/ожидание.
         return redirect_to("/");
     }
 
-    std::string status = "pending";
-    std::string access_token;
-    std::string refresh_token;
+    const std::string status = st->status;
 
-    auto auth_payload = nlohmann::json::parse(check_response.body, nullptr, false);
+    if (status == "approved" || status == "success") {
+        if (st->access_token.empty() || st->refresh_token.empty()) {
+            return redirect_to("/");
+        }
+
+        session.status = "authorized";
+        session.access_token = st->access_token;
+        session.refresh_token = st->refresh_token;
+        session.login_token.clear();
+
+        redis.set(session_key, serialize_session(session));
+        return handle_authorized(req, redis, session_key, session);
+    }
+
+    if (status == "denied" || status == "expired") {
+        redis.del(session_key);
+        return redirect_to("/");
+    }
+
+    return login_page();
+
     if (!auth_payload.is_discarded()) {
         status = auth_payload.value("status", "pending");
         access_token = auth_payload.value("access_token", "");
@@ -210,7 +191,7 @@ crow::response handle_anonymous(const crow::request& req,
 
     return login_page();
 }
-} // namespace
+ // namespace
 
 crow::response handle_request(const crow::request& req, RedisClient& redis) {
     std::string path = path_only(req.url);

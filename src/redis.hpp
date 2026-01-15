@@ -2,6 +2,7 @@
 #include <sw/redis++/redis++.h>
 #include <optional>
 #include <string>
+#include <mutex>
 
 class RedisClient {
 public:
@@ -12,4 +13,5 @@ public:
 
 private:
     sw::redis::Redis redis;
+    std::mutex mtx;
 };
