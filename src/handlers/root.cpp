@@ -1,9 +1,10 @@
 #include "../handlers.hpp"
-#include "common.hpp"
+#include "common.hpp" // где объявлен handle_request
 
-void register_root(crow::SimpleApp& app, RedisClient& redis) {
-    CROW_ROUTE(app, "/")
+CROW_ROUTE(app, "/")
+    .methods(crow::HTTPMethod::GET)
     ([&redis](const crow::request& req) {
         return handle_request(req, redis);
     });
-}
+
+

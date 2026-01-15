@@ -1,4 +1,5 @@
 #include "common.hpp"
+#include <nlohmann/json.hpp>
 
 #include "../redis.hpp"
 #include "../session.hpp"
@@ -47,24 +48,299 @@ std::string path_only(const std::string& url) {
     return url.substr(0, pos);
 }
 
+std::string method_to_string(crow::HTTPMethod m) {
+    switch (m) {
+        case crow::HTTPMethod::GET:     return "GET";
+        case crow::HTTPMethod::POST:    return "POST";
+        case crow::HTTPMethod::PUT:     return "PUT";
+        case crow::HTTPMethod::DELETE:  return "DELETE";
+        case crow::HTTPMethod::PATCH:   return "PATCH";
+        case crow::HTTPMethod::HEAD:    return "HEAD";
+        case crow::HTTPMethod::OPTIONS: return "OPTIONS";
+        default: return "";
+    }
+}
+
+struct MainCallResult {
+    int status;
+    std::string body;
+};
+
+MainCallResult main_get_with_refresh(
+    const std::string& url,
+    RedisClient& redis,
+    const std::string& session_key,
+    SessionData& session
+) {
+    MainClient main(main_base_url());
+    auto r = main.Do("GET", url, "", session.access_token);
+
+    if (r.status != 401) {
+        return {r.status, r.body};
+    }
+
+    // 401 → пробуем refresh один раз
+    AuthClient auth(auth_base_url());
+    auto refreshed = auth.Refresh(session.refresh_token);
+    if (!refreshed) {
+        redis.del(session_key);
+        return {401, ""};
+    }
+
+    session.access_token = refreshed->access_token;
+    session.refresh_token = refreshed->refresh_token;
+    redis.set(session_key, serialize_session(session));
+
+    // retry
+    r = main.Do("GET", url, "", session.access_token);
+    if (r.status == 401) {
+        redis.del(session_key);
+        return {401, ""};
+    }
+
+    return {r.status, r.body};
+}
+
+// --- safe HTML rendering helpers ---
+
+std::string html_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;";  break;
+            case '>': out += "&gt;";  break;
+            case '"': out += "&quot;"; break;
+            case '\'': out += "&#39;"; break;
+            default: out += c; break;
+        }
+    }
+    return out;
+}
+
+std::vector<nlohmann::json> json_as_list(const nlohmann::json& j) {
+    if (j.is_array()) return j.get<std::vector<nlohmann::json>>();
+
+    if (j.is_object()) {
+        for (const char* key : {"items", "results", "data"}) {
+            auto it = j.find(key);
+            if (it != j.end() && it->is_array()) {
+                return it->get<std::vector<nlohmann::json>>();
+            }
+        }
+    }
+    return {};
+}
+
+std::string json_get_str(const nlohmann::json& o, const std::vector<std::string>& keys) {
+    for (const auto& k : keys) {
+        auto it = o.find(k);
+        if (it != o.end()) {
+            if (it->is_string()) return it->get<std::string>();
+            if (it->is_number_integer()) return std::to_string(it->get<long long>());
+            if (it->is_number_unsigned()) return std::to_string(it->get<unsigned long long>());
+        }
+    }
+    return "";
+}
+
+std::string link_list_from_json(const std::string& title,
+                               const std::string& raw_json,
+                               const std::string& base_path,
+                               const std::string& id_param,
+                               const std::vector<std::string>& id_keys,
+                               const std::vector<std::string>& label_keys) {
+    std::string html;
+    html += "<h2>" + html_escape(title) + "</h2>";
+
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(raw_json);
+    } catch (...) {
+        html += "<p><b>Не смог распарсить JSON</b></p>";
+        html += "<pre>" + html_escape(raw_json) + "</pre>";
+        return html;
+    }
+
+    auto items = json_as_list(j);
+    if (items.empty()) {
+        html += "<pre>" + html_escape(raw_json) + "</pre>";
+        return html;
+    }
+
+    html += "<ul>";
+    for (const auto& it : items) {
+        if (!it.is_object()) continue;
+
+        std::string id = json_get_str(it, id_keys);
+        std::string label = json_get_str(it, label_keys);
+        if (label.empty()) label = id.empty() ? "(item)" : ("ID " + id);
+
+        if (!id.empty()) {
+            html += "<li><a href='" + base_path + "?" + id_param + "=" + id + "'>"
+                 + html_escape(label) + "</a></li>";
+        } else {
+            html += "<li>" + html_escape(label) + "</li>";
+        }
+    }
+    html += "</ul>";
+
+    return html;
+}
+
+crow::response dashboard_page_with_data(const std::string& courses_json,
+                                       const std::string& notif_json,
+                                       const std::string* users_json_or_null) {
+    std::string html;
+
+    html += "<h1>Dashboard</h1>";
+    html += "<a href='/logout'>Logout</a><br>";
+    html += "<a href='/logout?all=true'>Logout everywhere</a>";
+    html += "<hr>";
+
+    // Навигация
+    html += "<h2>Навигация</h2>";
+    html += "<ul>";
+    html += "<li><a href='/courses'>Courses</a></li>";
+    html += "<li><a href='/notifications'>Notifications</a></li>";
+    html += "<li><a href='/users'>Users</a></li>";
+    html += "</ul>";
+    html += "<hr>";
+
+    html += link_list_from_json(
+        "Courses (кликабельно, если есть id/course_id)",
+        courses_json,
+        "/course",
+        "course_id",
+        {"course_id", "id"},
+        {"name", "title", "description"}
+    );
+
+    html += "<h2>Notifications</h2>";
+    html += "<pre>" + html_escape(notif_json) + "</pre>";
+
+    if (users_json_or_null) {
+        html += link_list_from_json(
+            "Users (кликабельно, если есть id)",
+            *users_json_or_null,
+            "/user",
+            "id",
+            {"id", "user_id"},
+            {"fullName", "full_name", "name", "fio"}
+        );
+    } else {
+        html += "<h2>Users</h2><p><i>Нет доступа или endpoint недоступен</i></p>";
+    }
+
+    return crow::response(html);
+}
+
+// --- END helpers ---
+
 crow::response handle_authorized(const crow::request& req,
                                 RedisClient& redis,
                                 const std::string& session_key,
                                 SessionData session) {
     const std::string path = path_only(req.url);
 
+    // Dashboard: интеграция с Main (и refresh работает через helper)
     if (path == "/") {
-        return dashboard_page();
+        return crow::response("<h1>NEW DASHBOARD</h1>");
+
+        auto courses = main_get_with_refresh("/courses_list", redis, session_key, session);
+        if (courses.status == 401) return redirect_to("/");
+        if (courses.status == 403) return crow::response(403, "<h1>Access denied</h1>");
+
+        auto notif = main_get_with_refresh("/notification", redis, session_key, session);
+        if (notif.status == 401) return redirect_to("/");
+        if (notif.status == 403) return crow::response(403, "<h1>Access denied</h1>");
+
+        auto users = main_get_with_refresh("/users_list", redis, session_key, session);
+        if (users.status == 401) return redirect_to("/");
+
+        if (users.status == 403 || users.status < 200 || users.status >= 300) {
+            return dashboard_page_with_data(courses.body, notif.body, nullptr);
+        }
+        return dashboard_page_with_data(courses.body, notif.body, &users.body);
     }
+
     if (path == "/login") {
         return redirect_to("/");
     }
 
-    if (req.method != crow::HTTPMethod::GET && req.method != crow::HTTPMethod::POST) {
-        return crow::response(405);
+    // Списки
+    if (path == "/courses") {
+        auto r = main_get_with_refresh("/courses_list", redis, session_key, session);
+        if (r.status == 401) return redirect_to("/");
+        if (r.status == 403) return crow::response(403, "<h1>Access denied</h1>");
+
+        std::string html;
+        html += "<h1>Courses</h1><a href='/'>Back</a><hr>";
+        html += link_list_from_json("Courses", r.body, "/course", "course_id",
+                                   {"course_id","id"}, {"name","title","description"});
+        return crow::response(html);
     }
 
-    const std::string method = (req.method == crow::HTTPMethod::GET) ? "GET" : "POST";
+    if (path == "/users") {
+        auto r = main_get_with_refresh("/users_list", redis, session_key, session);
+        if (r.status == 401) return redirect_to("/");
+        if (r.status == 403) return crow::response(403, "<h1>Access denied</h1>");
+
+        std::string html;
+        html += "<h1>Users</h1><a href='/'>Back</a><hr>";
+        html += link_list_from_json("Users", r.body, "/user", "id",
+                                   {"id","user_id"}, {"fullName","full_name","name","fio"});
+        return crow::response(html);
+    }
+
+    if (path == "/notifications") {
+        auto r = main_get_with_refresh("/notification", redis, session_key, session);
+        if (r.status == 401) return redirect_to("/");
+        if (r.status == 403) return crow::response(403, "<h1>Access denied</h1>");
+
+        std::string html;
+        html += "<h1>Notifications</h1><a href='/'>Back</a><hr>";
+        html += "<pre>" + html_escape(r.body) + "</pre>";
+        return crow::response(html);
+    }
+
+    // Детали
+    if (path == "/course") {
+        auto course_id = req.url_params.get("course_id");
+        if (!course_id) return crow::response(400, "<h1>course_id required</h1>");
+
+        std::string url = std::string("/course_get?course_id=") + course_id;
+        auto r = main_get_with_refresh(url, redis, session_key, session);
+        if (r.status == 401) return redirect_to("/");
+        if (r.status == 403) return crow::response(403, "<h1>Access denied</h1>");
+
+        std::string html;
+        html += "<h1>Course</h1><a href='/courses'>Back</a><hr>";
+        html += "<pre>" + html_escape(r.body) + "</pre>";
+        return crow::response(html);
+    }
+
+    if (path == "/user") {
+        auto id = req.url_params.get("id");
+        if (!id) return crow::response(400, "<h1>id required</h1>");
+
+        std::string url = std::string("/user_get?id=") + id;
+        auto r = main_get_with_refresh(url, redis, session_key, session);
+        if (r.status == 401) return redirect_to("/");
+        if (r.status == 403) return crow::response(403, "<h1>Access denied</h1>");
+
+        std::string html;
+        html += "<h1>User</h1><a href='/users'>Back</a><hr>";
+        html += "<pre>" + html_escape(r.body) + "</pre>";
+        return crow::response(html);
+    }
+
+    // Остальные URL: общий прокси в Main как было
+    const std::string method = method_to_string(req.method);
+    if (method.empty()) {
+        return crow::response(405);
+    }
 
     MainClient main(main_base_url());
     auto main_result = main.Do(method, req.url, req.body, session.access_token);
@@ -106,24 +382,18 @@ crow::response handle_anonymous(const crow::request& req,
                                SessionData session) {
     const std::string path = path_only(req.url);
 
-    // Если пользователь зашёл на /login?type=... — этим занимается login.cpp (отдельный роут).
-    // Здесь catchall, поэтому просто дадим ему отработать или редирект на /
     if (path == "/login") {
         return redirect_to("/");
     }
 
-    // Если нет login_token — сессия битая/неполная
     if (session.login_token.empty()) {
         redis.del(session_key);
         return redirect_to("/");
     }
 
-    // Проверяем статус авторизации в Auth-модуле
     AuthClient auth(auth_base_url());
     auto st = auth.Status(session.login_token);
 
-    // Если Auth недоступен — по сценарию можно редирект/ожидание.
-    // Я оставляю редирект на / (чтобы пользователь мог повторить).
     if (!st) {
         return redirect_to("/");
     }
@@ -132,7 +402,6 @@ crow::response handle_anonymous(const crow::request& req,
 
     if (status == "approved" || status == "success") {
         if (st->access_token.empty() || st->refresh_token.empty()) {
-            // Некорректный ответ Auth — откатываем
             return redirect_to("/");
         }
 
@@ -143,7 +412,6 @@ crow::response handle_anonymous(const crow::request& req,
 
         redis.set(session_key, serialize_session(session));
 
-        // Продолжаем обработку запроса как authorized (в т.ч. для "/")
         return handle_authorized(req, redis, session_key, session);
     }
 
@@ -152,17 +420,17 @@ crow::response handle_anonymous(const crow::request& req,
         return redirect_to("/");
     }
 
-    // pending / unknown: показываем login page (включая "/")
-    return login_page();
+    if (path == "/") {
+        return login_page();
+    }
+    return redirect_to("/");
 }
-
 
 } // namespace
 
 crow::response handle_request(const crow::request& req, RedisClient& redis) {
     const std::string path = path_only(req.url);
 
-    // Нет cookie -> неизвестный пользователь
     std::string session = extract_session(req.get_header_value("Cookie"));
     if (session.empty()) {
         if (path == "/") return login_page();
@@ -171,7 +439,6 @@ crow::response handle_request(const crow::request& req, RedisClient& redis) {
 
     const std::string session_key = "session:" + session;
 
-    // Сессии в Redis нет -> неизвестный пользователь
     auto data = redis.get(session_key);
     if (!data) {
         if (path == "/") return login_page();
@@ -192,8 +459,17 @@ crow::response handle_request(const crow::request& req, RedisClient& redis) {
 }
 
 void register_catchall(crow::SimpleApp& app, RedisClient& redis) {
-    CROW_ROUTE(app, "/<path>")
-    ([&redis](const crow::request& req, const std::string&) {
-        return handle_request(req, redis);
-    });
+    CROW_CATCHALL_ROUTE(app)
+        .methods(
+            crow::HTTPMethod::GET,
+            crow::HTTPMethod::POST,
+            crow::HTTPMethod::PUT,
+            crow::HTTPMethod::DELETE,
+            crow::HTTPMethod::PATCH,
+            crow::HTTPMethod::HEAD,
+            crow::HTTPMethod::OPTIONS
+        )
+        ([&redis](const crow::request& req) {
+            return handle_request(req, redis);
+        });
 }
