@@ -16,6 +16,8 @@ add_executable(web-client
     src/handlers/login.cpp
     src/handlers/logout.cpp
     src/handlers/common.cpp
+    src/api/auth_client.cpp
+    src/api/main_client.cpp
 )
 
 target_link_libraries(web-client
