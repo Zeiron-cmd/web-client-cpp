@@ -43,7 +43,8 @@ RUN cmake -B build \
 # ===== app =====
 WORKDIR /app
 COPY . .
-RUN cmake -B build \
+RUN rm -rf build \
+ && cmake -S . -B build \
  && cmake --build build -j$(nproc)
 
 CMD ["./build/web-client"]
